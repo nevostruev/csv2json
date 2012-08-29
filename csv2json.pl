@@ -16,12 +16,14 @@ use Getopt::Long;
 	my $write = "json";
 	my $trim_whitespaces = 0;
 	my $auto_group = 0;
+	my $join_csv = undef;
 	GetOptions(
 		"--separator|s=s" => \$separator,
 		"--help|h!" => \$show_help,
 		"--write=s" => \$write,
 		"--trim-whitespaces!" => \$trim_whitespaces,
 		"--auto-group!" => \$auto_group,
+		"--join-csv=s" => \$join_csv,
 	) or show_help();
 	show_help() if $show_help;
 
@@ -31,6 +33,10 @@ use Getopt::Long;
 	my $data = read_csv($fn, $ordered_hash_available, $separator, $trim_whitespaces);
 	if ($auto_group) {
 		$data = auto_group($data, $ordered_hash_available);
+	}
+	if (defined $join_csv) {
+		my $join_data = read_csv($join_csv, $ordered_hash_available, $separator, $trim_whitespaces);
+		$data = join_data($data, $join_data, $ordered_hash_available);
 	}
 	if ($write eq 'csv') {
 		write_csv($data, $separator);
@@ -117,6 +123,9 @@ sub auto_group {
 			}
 			for my $row (@$data) {
 				$all_keys{$row->{$key}} = 1;
+				if (exists $grouped{$row->{$group}}{$row->{$key}})  {
+					die "duplicated value at [" . $row->{$group} . "] key [" . $row->{$key} . "]";
+				}
 				$grouped{$row->{$group}}{$row->{$key}} = $row->{$value};
 			}
 			my @new_data;
@@ -135,6 +144,63 @@ sub auto_group {
 		} else {
 			die "auto-group only works with 3 columns";
 		}
+	}
+}
+
+sub join_data {
+    my ($data, $join_data, $ordered_hash_available) = @_;
+	
+	if (@$join_data) {
+		my @join_columns = keys %{ $join_data->[0] };
+		my $join_column = $join_columns[0];
+		my %join;
+		for my $join_row (@$join_data) {
+			if (exists $join{$join_row->{$join_column}}) {
+				die "duplicated value in join data [" . $join_row->{$join_column} . "] (column $join_column)";
+			}
+			$join{$join_row->{$join_column}} = $join_row;
+		}
+		if (@$data) {
+			my %data_used_in_join;
+			my @main_columns = keys %{ $data->[0] };
+			my $main_column = $main_columns[0];
+			for my $row (@$data) {
+				my $row_id = $row->{$main_column};
+				if (exists $join{$row_id}) {
+					$data_used_in_join{$row_id} = 1;
+					for my $column (@join_columns) {
+						$row->{$column} = $join{$row_id}{$column};
+					}
+				} else {
+					for my $column (@join_columns) {
+						unless (exists $row->{$column}) {
+							$row->{$column} = undef;
+						}
+					}
+				}
+			}
+			## adding data that was not joined
+			for my $row_id (keys %join) {
+				unless (exists $data_used_in_join{$row_id}) {
+					my %r;
+					if ($ordered_hash_available) {
+						tie %r, "Tie::IxHash";
+					}
+					for my $column (@main_columns) {
+						$r{$column} = undef;
+					}
+					for my $column (@join_columns) {
+						$r{$column} = $join{$row_id}{$column};
+					}
+					push(@$data, \%r);
+				}
+			}
+			return $data;
+		} else {
+			return $join_data;
+		}
+	} else {
+		return $data;
 	}
 }
 
