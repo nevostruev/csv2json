@@ -17,20 +17,53 @@ use Getopt::Long;
 	my $write = "json";
 	my $trim_whitespaces = 0;
 	my $auto_group = 0;
-	my $join_csv = undef;
+	my $join_data = undef;
 	GetOptions(
 		"--separator|s=s" => \$separator,
 		"--help|h!" => \$show_help,
 		"--write=s" => \$write,
 		"--trim-whitespaces!" => \$trim_whitespaces,
 		"--auto-group!" => \$auto_group,
-		"--join-csv=s" => \$join_csv,
+		"--join-data=s" => \$join_data,
 	) or show_help();
 	show_help() if $show_help;
 
 	## use STDIN if file name is not specified
-	my $fn = ( @ARGV ? shift @ARGV : "-" );
+	my ($fn) = @ARGV;
+	unless (defined $fn) {
+		die "input file name is required";
+	}
 
+	my ($data, $format) = smart_read_data($fn, $ordered_hash_available, $separator, $trim_whitespaces, $xslx_format_available);
+	
+	if ($auto_group) {
+		$data = auto_group($data, $ordered_hash_available);
+	}
+	if (defined $join_data) {
+		my ($join_data, undef) = smart_read_data($join_data, $ordered_hash_available, $separator, $trim_whitespaces, $xslx_format_available);
+		$data = join_data($data, $join_data, $ordered_hash_available);
+	}
+	my $output = \*STDOUT;
+	if ($write eq 'self') {
+		open($output, ">", $fn) or die "can't write [$fn]: $!";
+	} else {
+		$format = $write;
+	}
+	if ($format eq 'csv') {
+		write_csv($data, $separator, $output);
+	} elsif ($format eq 'json') {
+		write_json($data, $output);
+	} else {
+		die "can't write [$format] format";
+	}
+	if ($write eq 'self') {
+		close($output);
+	}
+}
+
+sub smart_read_data {
+    my ($fn, $ordered_hash_available, $separator, $trim_whitespaces, $xslx_format_available) = @_;
+	
 	my $type_detected = smart_file_type_detection($fn, $xslx_format_available) // 'csv';
 
 	my $data = undef;
@@ -41,23 +74,10 @@ use Getopt::Long;
 	} elsif ($type_detected eq 'xlsx') {
 		$data = read_xlsx($fn);
 	}
-
 	unless (defined $data) {
 		die "can't read $type_detected format from [$fn]";
 	}
-	
-	if ($auto_group) {
-		$data = auto_group($data, $ordered_hash_available);
-	}
-	if (defined $join_csv) {
-		my $join_data = read_csv($join_csv, $ordered_hash_available, $separator, $trim_whitespaces);
-		$data = join_data($data, $join_data, $ordered_hash_available);
-	}
-	if ($write eq 'csv') {
-		write_csv($data, $separator);
-	} else {
-		write_json($data);
-	}
+	return ($data, $type_detected);
 }
 
 sub smart_file_type_detection {
@@ -89,9 +109,9 @@ sub smart_file_type_detection {
 }
 
 sub write_json {
-	my ($data) = @_;
+	my ($data, $output) = @_;
 
-	print to_json(
+	print $output to_json(
 		$data, 
 		{
 			'utf8' => 1, 
@@ -101,7 +121,7 @@ sub write_json {
 }
 
 sub write_csv {
-    my ($data, $separator) = @_;
+    my ($data, $separator, $output) = @_;
 	
 	my $csv = Text::CSV->new(
 		{
@@ -113,9 +133,9 @@ sub write_csv {
 
 	if (@$data) {
 		my @columns = keys %{ $data->[0] };
-		$csv->print(\*STDOUT, \@columns);
+		$csv->print($output, \@columns);
 		for my $row (@$data) {
-			$csv->print(\*STDOUT, [ @$row{@columns} ]);
+			$csv->print($output, [ @$row{@columns} ]);
 		}
 	}
 }
@@ -331,6 +351,6 @@ sub join_data {
 }
 
 sub show_help {
-	print "Usage: $0 [--separator=?] [--write=json|csv] [--trim-whitespaces] [--auto-group] [--help] [file]\n";
+	print "Usage: $0 [--separator=?] [--write=json|csv|self] [--trim-whitespaces] [--auto-group] [--join-data=file] [--help] <file>\n";
 	exit(1);
 }

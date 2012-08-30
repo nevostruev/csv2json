@@ -9,6 +9,7 @@ Features
    * Creates table that uses unique values from second column as column names of result table
    * Usefull if you need to convert data from mysql "group by" query into plain table
  * Can specify separator for CSV
+ * Write joined data to original file and format
 
 TODO
 ----
