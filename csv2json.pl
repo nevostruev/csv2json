@@ -10,6 +10,7 @@ use Getopt::Long;
 {
 	## try to load Tie::IxHash
 	my $ordered_hash_available = eval { require Tie::IxHash };
+	my $xslx_format_available = eval { require Spreadsheet::XLSX };
 
 	my $separator = ",";
 	my $show_help = 0;
@@ -30,7 +31,21 @@ use Getopt::Long;
 	## use STDIN if file name is not specified
 	my $fn = ( @ARGV ? shift @ARGV : "-" );
 
-	my $data = read_csv($fn, $ordered_hash_available, $separator, $trim_whitespaces);
+	my $type_detected = smart_file_type_detection($fn, $xslx_format_available) // 'csv';
+
+	my $data = undef;
+	if ($type_detected eq 'csv') {
+		$data = read_csv($fn, $ordered_hash_available, $separator, $trim_whitespaces);
+	} elsif ($type_detected eq 'table') {
+		$data = read_table($fn, $ordered_hash_available, $trim_whitespaces);
+	} elsif ($type_detected eq 'xlsx') {
+		$data = read_xlsx($fn);
+	}
+
+	unless (defined $data) {
+		die "can't read $type_detected format from [$fn]";
+	}
+	
 	if ($auto_group) {
 		$data = auto_group($data, $ordered_hash_available);
 	}
@@ -43,6 +58,34 @@ use Getopt::Long;
 	} else {
 		write_json($data);
 	}
+}
+
+sub smart_file_type_detection {
+    my ($file, $xslx_format_available) = @_;
+	
+	## FIX doen't work with STDIN
+	open(my $fh, "<", $file) or die "can't read [$file]: $!";
+	my $lines = "";
+	my $count = 5;
+	while (<$fh>) {
+		$lines .= $_;
+		last unless -- $count;
+	}
+	close($fh);
+
+	if ($file =~ m{\.xlsx$}) { ## *.xlsx or *.xls
+		unless ($xslx_format_available) {
+			die "can't parse xlsx without Spreadsheet::ParseExcel module";
+		}
+		return 'xlsx';
+	} elsif ($lines =~ m{^[^,]+,[^,]+}) { ## "column 1,column 2"
+		return 'csv';
+	} elsif ($lines =~ m/^\s*[{\]]/) { ## "[" or "{"
+		return 'json';
+	} elsif ($lines =~ m{^\s*(?:\|\s|\+-)}) { ## "| " or "+-"
+		return 'table';
+	}
+	return undef;
 }
 
 sub write_json {
@@ -88,7 +131,7 @@ sub read_csv {
 		} 
 	) or die "can't create Text::CSV: ".Text::CSV->error_diag();
 
-	open(my $fh, $fn) or die "can't read [$fn]: $!";
+	open(my $fh, "<", $fn) or die "can't read [$fn]: $!";
 	binmode($fh, ":utf8");
 	my ($columns, @rows);
 	while ( my $row = $csv->getline( $fh ) ) {
@@ -107,6 +150,89 @@ sub read_csv {
 	close($fh);
 
 	return \@rows;
+}
+
+sub read_table {
+    my ($fn, $ordered_hash_available) = @_;
+	
+    open(my $fh, "<", $fn) or die "can't read [$fn]: $!";
+    binmode($fh, ":utf8");
+
+	my (@columns, @rows);
+    my $state = 0; ## 0 - first sep, 1 - columns, 2 - second sep, 3 - data
+    while (defined(my $line = <$fh>)) {
+    	if ($line =~ m{^[\+-]+\s*}) { ## "+-..."
+    		if ($state == 0) {
+    			$state = 1;
+    		} elsif ($state == 2) {
+    			$state = 3;
+    		} else {
+    			## ignore unexpected separator
+    		}
+    	} else {
+    		if ($state == 0 || $state == 1) {
+    			@columns = get_table_columns($line);
+    			$state = 2;
+    		} elsif ($state == 2 || $state == 3) {
+				my %r;
+				if ($ordered_hash_available) {
+					tie %r, "Tie::IxHash";
+				}
+				@r{@columns} = get_table_columns($line);
+				push(@rows, \%r);
+    			$state = 3;
+    		}
+    	}
+    }
+    close($fh);
+	return \@rows;
+}
+
+sub read_xlsx {
+    my ($fn, $ordered_hash_available) = @_;
+	
+	my $excel = Spreadsheet::XLSX->new($fn);
+	for my $sheet (@{$excel->{'Worksheet'}}) {
+		my ($columns, @rows);
+        $sheet->{'MaxRow'} ||= $sheet->{'MinRow'};
+        $sheet->{'MaxCol'} ||= $sheet->{'MinCol'};
+        for my $row ($sheet->{'MinRow'} .. $sheet->{'MaxRow'}) {
+        	if (defined $columns) {
+				my %r;
+				if ($ordered_hash_available) {
+					tie %r, "Tie::IxHash";
+				}
+				@r{@$columns} = get_xlsx_columns($sheet, $row);
+				delete $r{""};
+				push(@rows, \%r);
+        	} else {
+        		$columns = [ get_xlsx_columns($sheet, $row) ];
+        	}
+        }
+        if (@rows) {
+	        return \@rows;
+        }
+	}
+	return undef;
+}
+
+sub get_xlsx_columns {
+    my ($sheet, $row) = @_;
+	
+	my @columns;
+	for my $col ($sheet->{'MinCol'} ..  $sheet->{'MaxCol'}) {
+		my $val = $sheet->{'Cells'}[$row][$col];
+		push(@columns, (defined $val ? $val->{'Val'} : undef));
+	}
+	return @columns;
+}
+
+sub get_table_columns {
+    my ($line) = @_;
+	
+	$line =~ s/^\s*\|\s+//;
+	$line =~ s/\s+\|\s*$//;
+	return split(/\s+\|\s+/, $line);
 }
 
 sub auto_group {
