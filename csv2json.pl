@@ -53,6 +53,8 @@ use Getopt::Long;
 		write_csv($data, $separator, $output);
 	} elsif ($format eq 'json') {
 		write_json($data, $output);
+	} elsif ($format eq 'jira') {
+		write_jira($data, $output);
 	} else {
 		die "can't write [$format] format";
 	}
@@ -72,7 +74,7 @@ sub smart_read_data {
 	} elsif ($type_detected eq 'table') {
 		$data = read_table($fn, $ordered_hash_available, $trim_whitespaces);
 	} elsif ($type_detected eq 'xlsx') {
-		$data = read_xlsx($fn);
+		$data = read_xlsx($fn, $ordered_hash_available);
 	}
 	unless (defined $data) {
 		die "can't read $type_detected format from [$fn]";
@@ -136,6 +138,18 @@ sub write_csv {
 		$csv->print($output, \@columns);
 		for my $row (@$data) {
 			$csv->print($output, [ @$row{@columns} ]);
+		}
+	}
+}
+
+sub write_jira {
+    my ($data, $output) = @_;
+	
+	if (@$data) {
+		my @columns = keys %{ $data->[0] };
+		print $output  "|| " . join(" || ", map { $_ // ''} @columns) . " ||\n";
+		for my $row (@$data) {
+			print $output "| " . join(" | ", map { $_ // ''} @$row{@columns}) . " |\n";
 		}
 	}
 }
@@ -351,6 +365,6 @@ sub join_data {
 }
 
 sub show_help {
-	print "Usage: $0 [--separator=?] [--write=json|csv|self] [--trim-whitespaces] [--auto-group] [--join-data=file] [--help] <file>\n";
+	print "Usage: $0 [--separator=?] [--write=json|csv|self|jira] [--trim-whitespaces] [--auto-group] [--join-data=file] [--help] <file>\n";
 	exit(1);
 }
