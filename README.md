@@ -16,6 +16,6 @@ TODO
 
  * Fix BOM while reading file
  * More input formats: JSON, XML
- * More output formats: Jira, XML
+ * More output formats: MySQL, XML
  * Fix various problems when data includes separators in "table" format
  * More user friendly error/warning reporting
