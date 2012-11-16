@@ -18,6 +18,7 @@ use Getopt::Long;
 	my $trim_whitespaces = 0;
 	my $auto_group = 0;
 	my $join_data = undef;
+	my $group_with_limit = undef;
 	GetOptions(
 		"--separator|s=s" => \$separator,
 		"--help|h!" => \$show_help,
@@ -25,6 +26,7 @@ use Getopt::Long;
 		"--trim-whitespaces!" => \$trim_whitespaces,
 		"--auto-group!" => \$auto_group,
 		"--join-data=s" => \$join_data,
+		"--group-with-limit=i" => \$group_with_limit,
 	) or show_help();
 	show_help() if $show_help;
 
@@ -36,6 +38,9 @@ use Getopt::Long;
 
 	my ($data, $format) = smart_read_data($fn, $ordered_hash_available, $separator, $trim_whitespaces, $xslx_format_available);
 	
+	if (defined $group_with_limit) {
+		$data = group_with_limit($data, $group_with_limit, $ordered_hash_available);
+	}
 	if ($auto_group) {
 		$data = auto_group($data, $ordered_hash_available);
 	}
@@ -61,6 +66,12 @@ use Getopt::Long;
 	if ($write eq 'self') {
 		close($output);
 	}
+}
+
+sub show_help {
+	print "Usage: $0 [--separator=?] [--write=json|csv|self|jira] [--trim-whitespaces] [--auto-group] ".
+		"[--join-data=file] [--group-with-limit=limit] [--help] <file>\n";
+	exit(1);
 }
 
 sub smart_read_data {
@@ -364,7 +375,45 @@ sub join_data {
 	}
 }
 
-sub show_help {
-	print "Usage: $0 [--separator=?] [--write=json|csv|self|jira] [--trim-whitespaces] [--auto-group] [--join-data=file] [--help] <file>\n";
-	exit(1);
+sub group_with_limit {
+    my ($data, $limit, $ordered_hash_available) = @_;
+
+	if (@$data) {
+		my @main_columns = keys %{ $data->[0] };
+		my $main_column = shift @main_columns;
+		my @output;
+		my %used;
+		for my $row (@$data) {
+			unless (exists $used{$row->{$main_column}}) {
+				$used{$row->{$main_column}} = 1;
+				my %r;
+				if ($ordered_hash_available) {
+					tie %r, "Tie::IxHash";
+				}
+				$r{$main_column} = $row->{$main_column};
+				my $count = 0;
+				for my $selected (grep {$_->{$main_column} eq $row->{$main_column}} @$data) {
+					if ($count < $limit) {
+						$count ++;
+						for my $column (@main_columns) {
+							$r{$column.' '. $count} = $selected->{$column};
+						}
+					} else {
+						last;	
+					}
+				}
+				while ($count < $limit) {
+					$count ++;
+					for my $column (@main_columns) {
+						$r{$column.' '. $count} = "";
+					}
+				}
+				push(@output, \%r);
+			}
+		}
+		return \@output;
+	} else {
+		return $data;
+	}
 }
+
