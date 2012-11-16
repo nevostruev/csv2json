@@ -12,7 +12,7 @@ use Getopt::Long;
 	my $ordered_hash_available = eval { require Tie::IxHash };
 	my $xslx_format_available = eval { require Spreadsheet::XLSX };
 
-	my $separator = ",";
+	my $separator = undef;
 	my $show_help = 0;
 	my $write = "json";
 	my $trim_whitespaces = 0;
@@ -58,6 +58,8 @@ use Getopt::Long;
 		write_csv($data, $separator, $output);
 	} elsif ($format eq 'json') {
 		write_json($data, $output);
+	} elsif ($format eq 'sql') {
+		write_sql($data, $fn, $output);
 	} elsif ($format eq 'jira') {
 		write_jira($data, $output);
 	} else {
@@ -77,11 +79,17 @@ sub show_help {
 sub smart_read_data {
     my ($fn, $ordered_hash_available, $separator, $trim_whitespaces, $xslx_format_available) = @_;
 	
-	my $type_detected = smart_file_type_detection($fn, $xslx_format_available) // 'csv';
+	my ($type_detected, $separator_detected) = smart_file_type_detection($fn, $xslx_format_available, $separator);
+	unless (defined $type_detected) {
+		$type_detected = 'csv';
+	}
+	if (defined $separator) {
+		$separator_detected = $separator;
+	}
 
 	my $data = undef;
 	if ($type_detected eq 'csv') {
-		$data = read_csv($fn, $ordered_hash_available, $separator, $trim_whitespaces);
+		$data = read_csv($fn, $ordered_hash_available, $separator_detected, $trim_whitespaces);
 	} elsif ($type_detected eq 'table') {
 		$data = read_table($fn, $ordered_hash_available, $trim_whitespaces);
 	} elsif ($type_detected eq 'xlsx') {
@@ -94,7 +102,7 @@ sub smart_read_data {
 }
 
 sub smart_file_type_detection {
-    my ($file, $xslx_format_available) = @_;
+    my ($file, $xslx_format_available, $separator) = @_;
 	
 	## FIX doen't work with STDIN
 	open(my $fh, "<", $file) or die "can't read [$file]: $!";
@@ -110,15 +118,33 @@ sub smart_file_type_detection {
 		unless ($xslx_format_available) {
 			die "can't parse xlsx without Spreadsheet::ParseExcel module";
 		}
-		return 'xlsx';
-	} elsif ($lines =~ m{^[^,]+,[^,]+}) { ## "column 1,column 2"
-		return 'csv';
+		return ('xlsx');
 	} elsif ($lines =~ m/^\s*[{\]]/) { ## "[" or "{"
-		return 'json';
+		return ('json');
 	} elsif ($lines =~ m{^\s*(?:\|\s|\+-)}) { ## "| " or "+-"
-		return 'table';
+		return ('table');
+	} else {
+		my ($first_line, $second_line, undef) = split(m{\r?\n}, $lines, 3);
+		unless (defined $separator) {
+			$separator = guess_separator($first_line, $second_line);
+		}
+		if (split($separator, $first_line) == split($separator, $second_line)) {
+			return ('csv', $separator);
+		}
 	}
-	return undef;
+	return;
+}
+
+sub guess_separator {
+    my ($first_line, $second_line) = @_;
+	
+	for my $separator (',', "\t", ';') {
+		if (split($separator, $first_line) > 1 && split($separator, $first_line) == split($separator, $second_line)) {
+			return $separator;
+		}
+	}
+	return ',';
+
 }
 
 sub write_json {
@@ -162,6 +188,47 @@ sub write_jira {
 		for my $row (@$data) {
 			print $output "| " . join(" | ", map { $_ // ''} @$row{@columns}) . " |\n";
 		}
+	}
+}
+
+sub write_sql {
+    my ($data, $file, $output) = @_;
+	
+
+    my $table_name = $file;
+	$table_name =~ s!^.*[\\/]!!;
+	$table_name =~ s!\..*$!!;
+	$table_name =~ s![\W]!_!g;
+	$table_name =~ s!_+!_!g;
+	$table_name =~ s!^_|_$!!g;
+	unless ($table_name) {
+		$table_name = "unknown";
+	}
+	for my $row (@$data) {
+		my @set;
+		for my $key (keys %$row) {
+			push(@set, "`$key`="._sql_quote($row->{$key}));
+		}
+		printf $output "INSERT INTO `%s` SET %s;\n", $table_name, join(', ', @set);
+	}
+}
+
+sub _sql_quote {
+    my ($str) = @_;
+	
+	if (defined $str) {
+		if ($str =~ m{^(?:[1-9]\d*|0)$}) {
+			return $str;
+		} else {
+			$str =~ s/\\/\\\\/g;
+			$str =~ s/'/\\'/g;
+			$str =~ s/\t/\\t/g;
+			$str =~ s/\n/\\n/g;
+			$str =~ s/\r/\\r/g;
+			return "'$str'";
+		}
+	} else {
+		return "NULL";
 	}
 }
 
@@ -277,7 +344,7 @@ sub get_table_columns {
 	
 	$line =~ s/^\s*\|\s+//;
 	$line =~ s/\s+\|\s*$//;
-	return split(/\s+\|\s+/, $line);
+	return split(/\s*\|\s+/, $line);
 }
 
 sub auto_group {
