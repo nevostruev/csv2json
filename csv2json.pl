@@ -165,7 +165,7 @@ sub write_csv {
 	my $csv = Text::CSV->new(
 		{
 			'binary' => 1,
-			'sep_char' => $separator,
+			'sep_char' => ($separator // ','),
 			'eol' => $/,
 		} 
 	) or die "can't create Text::CSV: ".Text::CSV->error_diag();
